@@ -23,8 +23,7 @@ const APP = {
   PRODUCT_AGE_LATE_HOURS: 24,
   CARD_AGE_WARN_HOURS: 8,
   CARD_AGE_LATE_HOURS: 12,
-  // Long-fused hazard card color is based on time remaining before the
-  // current alert/product expires (CAP/UGC purge time), not issuance age.
+  // Products and long-fused hazard cards use 8h aging / 12h outdated issuance-age thresholds.
   HAZARD_EXPIRY_WARN_MINUTES: 90,
   HAZARD_EXPIRY_LATE_MINUTES: 30,
   NWR_PNS_MAX_PRODUCTS: 140,
