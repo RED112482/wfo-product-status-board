@@ -19,8 +19,8 @@
 const APP = {
   TITLE: 'WFO Product Status Board',
   CACHE_SECONDS: 120,
-  PRODUCT_AGE_WARN_HOURS: 12,
-  PRODUCT_AGE_LATE_HOURS: 24,
+  PRODUCT_AGE_WARN_HOURS: 8,
+  PRODUCT_AGE_LATE_HOURS: 12,
   // Long-fused hazard card color is based on time remaining before the
   // current alert/product expires (CAP/UGC purge time), not issuance age.
   HAZARD_EXPIRY_WARN_MINUTES: 90,
@@ -444,8 +444,8 @@ function parseLongFusedHazards_(root, now) {
         certainty: String(p.certainty || ''),
         urgency: String(p.urgency || ''),
         vtec,
-        // Hazard card color is based on time remaining before this alert product expires.
-        state: hazardExpiryState_(expires, now),
+        // Hazard card color follows the same issuance-age thresholds as the main Products section.
+        state: ageState_(ageHours),
         sourceUrl
       };
 
