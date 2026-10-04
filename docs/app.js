@@ -15,6 +15,14 @@ function fmt(d){if(!d)return '—';d=new Date(d);return new Intl.DateTimeFormat(
 function fmtZ(d){if(!d)return '—';d=new Date(d);return String(d.getUTCMonth()+1).padStart(2,'0')+'/'+String(d.getUTCDate()).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+String(d.getUTCMinutes()).padStart(2,'0')+'z'}
 function age(d){if(!d)return '—';let m=Math.max(0,Math.floor((Date.now()-new Date(d))/60000));if(m<60)return m+'m';let h=Math.floor(m/60);return h<24?h+'h '+m%60+'m':Math.floor(h/24)+'d '+h%24+'h'}
 function until(d){if(!d)return 'expiration unavailable';let m=Math.ceil((new Date(d)-Date.now())/60000);if(m<=0)return 'expired';if(m<60)return m+'m until drop-off';let h=Math.floor(m/60),r=m%60;return h+'h '+r+'m until drop-off'}
+function productAgeState(d){
+  if(!d)return 'na';
+  const h=(Date.now()-new Date(d).getTime())/3600000;
+  if(!Number.isFinite(h))return 'na';
+  if(h>=12)return 'late';
+  if(h>=8)return 'warn';
+  return 'good';
+}
 function setMode(m){mode=m;document.getElementById('mobTab').classList.toggle('active',m==='mob');document.getElementById('backupTab').classList.toggle('active',m==='backup');render()}
 function setBackup(id){backup=id;render()}
 function loadData(force=false){
@@ -39,7 +47,7 @@ function officeHtml(o){
   const rvf=(o.rvf||[]).map(statusCard).join('');
   const radars=(o.radars||[]).map(radarCard).join('');
   const nwr=(o.nwr||[]).map(nwrCard).join('');
-  return '<div class="office-head"><div><div class="office-id">WFO '+esc(o.id)+'</div><div class="office-name">'+esc(o.name)+'</div></div><div class="legend"><span><i class="dot gooddot"></i>Good</span><span><i class="dot warndot"></i>Aging</span><span><i class="dot latedot"></i>Outdated</span><span><i class="dot nadot"></i>No data</span></div></div>'+
+  return '<div class="office-head"><div><div class="office-id">WFO '+esc(o.id)+'</div><div class="office-name">'+esc(o.name)+'</div></div></div>'+
     hazardPanel(o)+
     section('Products','Last issuance / update','<div class="grid products">'+products+'</div>')+
     section('TAF Monitor','Cycle-aware status','<div class="grid">'+tafs+'</div>')+
@@ -51,7 +59,8 @@ function officeHtml(o){
 function section(a,b,body){return '<section class="panel"><div class="section-title"><span>'+a+'</span><span class="muted">'+b+'</span></div>'+body+'</section>'}
 function productCard(p,key){
   if(!p)return '<div class="card na"><div><div class="name">'+esc(key)+'</div><div class="small">No data</div></div></div>';
-  return '<div class="card '+esc(p.state||'na')+'" onclick="openUrl(\''+esc(p.sourceUrl||'')+'\')"><div><div class="name">'+esc(p.label||key)+'</div><div class="small">'+esc(p.issuedAt?age(p.issuedAt)+' old':'No timestamp')+'</div></div><div>'+esc(p.issuedAt?fmtZ(p.issuedAt):'—')+'</div></div>'
+  const state=productAgeState(p.issuedAt);
+  return '<div class="card '+esc(state)+'" onclick="openUrl(\''+esc(p.sourceUrl||'')+'\')"><div><div class="name">'+esc(p.label||key)+'</div><div class="small">'+esc(p.issuedAt?age(p.issuedAt)+' old':'No timestamp')+'</div></div><div>'+esc(p.issuedAt?fmtZ(p.issuedAt):'—')+'</div></div>'
 }
 function tafCard(id,t){
   return '<div class="card taf '+esc(t?.state||'na')+'" onclick="openUrl(\''+esc(t?.sourceUrl||'')+'\')"><div class="name">'+esc(id)+'</div><div class="mini">'+esc(t?.status||t?.label||'No data')+'</div><div class="small">'+esc(t?.issuedAt?fmtZ(t.issuedAt):'—')+'</div></div>'
@@ -73,7 +82,8 @@ function hazardPanel(o){
   const cards=list.map(h=>{
     const code=h.displayProduct||h.product||'';
     const sub=(h.subHazards||[]).length?'<div class="small">Contains: '+esc(h.subHazards.join(' · '))+'</div>':'';
-    return '<div class="card hazard '+esc(h.state||'na')+'" onclick="openUrl(\''+esc(h.sourceUrl||'')+'\')"><div class="hazard-head"><div class="name">'+esc(h.event||h.headline||code)+'</div><span class="pill">'+esc(code+(h.action?' · '+h.action:''))+'</span></div>'+sub+'<div class="hazard-time">Expires '+esc(fmtZ(h.expiresAt))+' · '+esc(until(h.expiresAt))+'</div><div class="small">Updated '+esc(fmtZ(h.updatedAt))+(h.endsAt?' · Hazard valid until '+esc(fmtZ(h.endsAt)):'')+'</div><div class="small">'+esc(h.areaDesc||'')+'</div></div>';
+    const state=productAgeState(h.updatedAt);
+    return '<div class="card hazard '+esc(state)+'" onclick="openUrl(\''+esc(h.sourceUrl||'')+'\')"><div class="hazard-head"><div class="name">'+esc(h.event||h.headline||code)+'</div><span class="pill">'+esc(code+(h.action?' · '+h.action:''))+'</span></div>'+sub+'<div class="hazard-time">Expires '+esc(fmtZ(h.expiresAt))+' · '+esc(until(h.expiresAt))+'</div><div class="small">Updated '+esc(fmtZ(h.updatedAt))+(h.endsAt?' · Hazard valid until '+esc(fmtZ(h.endsAt)):'')+'</div><div class="small">'+esc(h.areaDesc||'')+'</div></div>';
   }).join('');
   return section('Long-Fused Hazards · '+list.length,'NPW / FAA / MWW / WSW / CFW / RFW / TCV','<div class="hazards">'+cards+'</div>');
 }
