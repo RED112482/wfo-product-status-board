@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WFO Mobile Product Status Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="shell">
+<header class="topbar">
+  <div><h1>WFO Mobile Product Status Board</h1><div class="muted">WFO MOB + Backup Offices</div></div>
+  <div class="right"><div id="updated" class="muted">Loading…</div><button onclick="loadData(true)">↻ Refresh</button></div>
+</header>
+<nav class="tabs">
+  <button id="mobTab" class="active" onclick="setMode('mob')">WFO MOB</button>
+  <button id="backupTab" onclick="setMode('backup')">Backup Offices</button>
+</nav>
+<div id="backupTabs" class="backup-tabs hidden"></div>
+<div id="content"><div class="panel loading">Loading live NWS/NOAA status…</div></div>
+<footer>Live NWS / NOAA data via Google Apps Script backend.</footer>
+</main>
+<div id="modal" class="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card"><button class="x" onclick="closeModal()">×</button><h3 id="modalTitle"></h3><div id="modalSub" class="muted"></div><img id="modalImg" alt="NOAA hydrograph"><div id="modalNote" class="note"></div></div>
+</div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
