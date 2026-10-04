@@ -3,7 +3,7 @@ let DATA=null,mode='mob',backup='LIX',riverCache={};
 function jsonp(api,params={}){
   return new Promise((resolve,reject)=>{
     const base=(window.STATUS_BOARD_CONFIG?.API_URL||'').trim();
-    if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(base)){
+    if(!/^https:\/\/script\.google\.com\/(?:a\/macros\/[^/]+\/)?macros\/s\/.+\/exec$/.test(base) && !/^https:\/\/script\.google\.com\/a\/macros\/[^/]+\/s\/.+\/exec$/.test(base)){
       reject(new Error('Set the Apps Script /exec URL in docs/config.js')); return;
     }
     const cb='__wfo_'+Date.now()+'_'+Math.random().toString(36).slice(2);
