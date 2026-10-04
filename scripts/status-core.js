@@ -182,7 +182,7 @@ function getDashboardData(forceRefresh) {
 
   Object.keys(APP.OFFICES).forEach(office => {
     APP.PRODUCTS.filter(p => p.kind === 'text').forEach(p => {
-      requests.push(req_(`https://api.weather.gov/products/types/${p.type}/locations/${office}/latest`, nwsHeaders));
+      requests.push(req_(`https://api.weather.gov/products/types/${p.type}/locations/${office}`, nwsHeaders));
       meta.push({ kind: 'text', office, product: p });
     });
 
@@ -225,12 +225,14 @@ function getDashboardData(forceRefresh) {
     if (m.kind === 'text') {
       const p = m.product;
       if (ok_(code) && json) {
-        const issued = parseDate_(json.issuanceTime || json.issueTime || json.generatedAt);
+        const refs = extractRvfProductRefs_(json);
+        const newest = refs.length ? refs[0] : null;
+        const issued = newest ? parseDate_(newest.issuedAt) : parseDate_(json.issuanceTime || json.issueTime || json.generatedAt);
         offices[m.office].products[p.key] = issued
           ? makeStatus_(p, issued, now, {
-              source: 'NWS Text Product API',
+              source: 'NWS Text Product History API',
               sourceUrl: `https://forecast.weather.gov/product.php?site=NWS&issuedby=${m.office}&product=${p.type}&format=CI&version=1&glossary=0`,
-              productId: json.id || null
+              productId: newest ? newest.id : (json.id || null)
             })
           : makeUnavailable_(p, 'No issuance timestamp returned', null);
       } else {
