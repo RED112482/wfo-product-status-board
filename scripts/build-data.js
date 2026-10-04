@@ -71,3 +71,5 @@ for(const office of ['MOB','LIX','TAE','KEY']){
 }
 write('build-meta.json',{generatedAt:new Date().toISOString(),source:'GitHub Actions',version:1});
 console.log('Status data generated:',new Date().toISOString());
+
+// Triggered by source changes; scheduled workflow refreshes data every 5 minutes.
