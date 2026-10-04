@@ -63,29 +63,41 @@ function productCard(p,key){
   const state=productAgeState(p.issuedAt);
   return '<div class="card product-card '+esc(state)+'" data-product-key="'+esc(key)+'" onclick="openUrl(\''+esc(p.sourceUrl||'')+'\')"><div><div class="name">'+esc(p.label||key)+'</div><div class="small product-age">'+esc(p.issuedAt?age(p.issuedAt)+' old':'No timestamp')+'</div></div><div class="product-issued">'+esc(p.issuedAt?fmtZ(p.issuedAt):'—')+'</div></div>'
 }
+function parseWmoTime(text){
+  const m=String(text||'').match(/\b[A-Z]{4}\d{2}\s+K[A-Z]{3}\s+(\d{2})(\d{2})(\d{2})\b/);
+  if(!m)return null;
+  const now=new Date(), day=+m[1], hour=+m[2], minute=+m[3], arr=[];
+  for(const mo of [-1,0,1]){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+mo,day,hour,minute));if(!isNaN(d))arr.push(d)}
+  arr.sort((a,b)=>Math.abs(a-now)-Math.abs(b-now)); return arr[0]||null;
+}
 async function refreshVisibleProductsLive(office){
   const o=DATA?.offices?.[office];
   if(!o)return;
   const keys=Object.keys(o.products||{}).filter(k=>!['TAF','NWPS','GRIDS'].includes(k));
   await Promise.allSettled(keys.map(async key=>{
-    const url='https://api.weather.gov/products/types/'+encodeURIComponent(key)+'/locations/'+encodeURIComponent(office);
-    const r=await fetch(url,{cache:'no-store',headers:{'Accept':'application/ld+json, application/json'}});
-    if(!r.ok)return;
-    const j=await r.json();
-    const arr=j['@graph']||j.products||j.items||[];
-    if(!Array.isArray(arr)||!arr.length)return;
-    let best=null,bestMs=-Infinity;
-    for(const item of arr){
-      const raw=item?.issuanceTime||item?.issueTime||item?.generatedAt;
-      const ms=raw?Date.parse(raw):NaN;
-      if(Number.isFinite(ms)&&ms>bestMs){bestMs=ms;best={item,raw}}
+    let bestMs=0;
+    try{
+      const page='https://forecast.weather.gov/product.php?site=NWS&issuedby='+encodeURIComponent(office)+'&product='+encodeURIComponent(key)+'&format=TXT&version=1&glossary=0';
+      const pr=await fetch(page,{cache:'no-store'});
+      if(pr.ok){const t=parseWmoTime(await pr.text());if(t)bestMs=t.getTime()}
+    }catch(e){}
+    if(!bestMs){
+      try{
+        const url='https://api.weather.gov/products/types/'+encodeURIComponent(key)+'/locations/'+encodeURIComponent(office);
+        const r=await fetch(url,{cache:'no-store',headers:{'Accept':'application/ld+json, application/json'}});
+        if(r.ok){
+          const j=await r.json(), arr=j['@graph']||j.products||j.items||[];
+          for(const item of (Array.isArray(arr)?arr:[])){
+            const raw=item?.issuanceTime||item?.issueTime||item?.generatedAt, ms=raw?Date.parse(raw):NaN;
+            if(Number.isFinite(ms)&&ms>bestMs)bestMs=ms;
+          }
+        }
+      }catch(e){}
     }
-    if(!best)return;
-    const p=o.products[key];
-    const current=p?.issuedAt?Date.parse(p.issuedAt):0;
+    if(!bestMs)return;
+    const p=o.products[key], current=p?.issuedAt?Date.parse(p.issuedAt):0;
     if(bestMs<=current)return;
     p.issuedAt=new Date(bestMs).toISOString();
-    p.productId=best.item?.id||p.productId||null;
     p.state=productAgeState(p.issuedAt);
     updateProductCardLive(key,p);
   }));
