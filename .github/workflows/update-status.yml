@@ -37,5 +37,6 @@ jobs:
             echo "No data changes."
           else
             git commit -m "Update live NWS status data"
+            git pull --rebase origin main
             git push
           fi
