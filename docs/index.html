@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=age-thresholds-1">
 </head>
 <body>
 <main class="shell">
@@ -20,6 +20,13 @@
   <button id="backupTab" onclick="setMode('backup')">Backup Offices</button>
 </nav>
 <div id="backupTabs" class="backup-tabs hidden"></div>
+<div class="age-legend">
+  <strong>Products + Long-Fused:</strong>
+  <span><i class="dot gooddot"></i>Good &lt; 8h</span>
+  <span><i class="dot warndot"></i>Aging 8h to &lt; 12h</span>
+  <span><i class="dot latedot"></i>Outdated ≥ 12h</span>
+  <span><i class="dot nadot"></i>No data</span>
+</div>
 <div id="content"><div class="panel loading">Loading live NWS/NOAA status…</div></div>
 <footer>Live NWS / NOAA data via GitHub Actions.</footer>
 </main>
