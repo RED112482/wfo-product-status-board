@@ -21,12 +21,12 @@
 </nav>
 <div id="backupTabs" class="backup-tabs hidden"></div>
 <div id="content"><div class="panel loading">Loading live NWS/NOAA status…</div></div>
-<footer>Live NWS / NOAA data via Google Apps Script backend.</footer>
+<footer>Live NWS / NOAA data via GitHub Actions.</footer>
 </main>
 <div id="modal" class="modal" onclick="if(event.target===this)closeModal()">
   <div class="modal-card"><button class="x" onclick="closeModal()">×</button><h3 id="modalTitle"></h3><div id="modalSub" class="muted"></div><img id="modalImg" alt="NOAA hydrograph"><div id="modalNote" class="note"></div></div>
 </div>
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=github-only-2"></script>
+<script src="app.js?v=github-only-2"></script>
 </body>
 </html>
