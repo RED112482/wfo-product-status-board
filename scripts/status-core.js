@@ -19,8 +19,10 @@
 const APP = {
   TITLE: 'WFO Product Status Board',
   CACHE_SECONDS: 120,
-  PRODUCT_AGE_WARN_HOURS: 8,
-  PRODUCT_AGE_LATE_HOURS: 12,
+  PRODUCT_AGE_WARN_HOURS: 12,
+  PRODUCT_AGE_LATE_HOURS: 24,
+  CARD_AGE_WARN_HOURS: 8,
+  CARD_AGE_LATE_HOURS: 12,
   // Long-fused hazard card color is based on time remaining before the
   // current alert/product expires (CAP/UGC purge time), not issuance age.
   HAZARD_EXPIRY_WARN_MINUTES: 90,
@@ -445,7 +447,7 @@ function parseLongFusedHazards_(root, now) {
         urgency: String(p.urgency || ''),
         vtec,
         // Hazard card color follows the same issuance-age thresholds as the main Products section.
-        state: ageState_(ageHours),
+        state: cardAgeState_(ageHours),
         sourceUrl
       };
 
@@ -1819,17 +1821,24 @@ function ageState_(ageHours) {
   return 'good';
 }
 
+function cardAgeState_(ageHours) {
+  if (ageHours == null || !isFinite(ageHours)) return 'na';
+  if (ageHours >= APP.CARD_AGE_LATE_HOURS) return 'late';
+  if (ageHours >= APP.CARD_AGE_WARN_HOURS) return 'warn';
+  return 'good';
+}
+
 function makeStatus_(product, issued, now, extra) {
   const ageHours = Math.max(0, (now.getTime() - issued.getTime()) / 3600000);
-  const state = ageState_(ageHours);
+  const state = cardAgeState_(ageHours);
   return Object.assign({
     key: product.key,
     label: product.label,
     state,
     issuedAt: issued.toISOString(),
     ageHours: Math.round(ageHours * 10) / 10,
-    warnHours: APP.PRODUCT_AGE_WARN_HOURS,
-    lateHours: APP.PRODUCT_AGE_LATE_HOURS
+    warnHours: APP.CARD_AGE_WARN_HOURS,
+    lateHours: APP.CARD_AGE_LATE_HOURS
   }, extra || {});
 }
 
@@ -1840,8 +1849,8 @@ function makeUnavailable_(product, reason, url) {
     state: 'na',
     issuedAt: null,
     ageHours: null,
-    warnHours: APP.PRODUCT_AGE_WARN_HOURS,
-    lateHours: APP.PRODUCT_AGE_LATE_HOURS,
+    warnHours: APP.CARD_AGE_WARN_HOURS,
+    lateHours: APP.CARD_AGE_LATE_HOURS,
     source: reason || 'Unavailable',
     sourceUrl: url || null
   };
