@@ -997,4 +997,925 @@ function discoverGaugesFromApi_(office, jsonHeaders) {
 
 function processTafs_(officeOut, office, json, code, now) {
   const tafProduct = product_('TAF');
-  let newest = null;
+  let newest = null;  if (ok_(code) && Array.isArray(json)) {
+    json.forEach(item => {
+      const station = String(item.icaoId || item.stationId || item.id || '').toUpperCase();
+      if (!station) return;
+      const t = extractTafIssue_(item);
+      if (t) {
+        officeOut.tafs[station] = makeTafCycleStatus_(station, t, now);
+        if (!newest || t > newest) newest = t;
+      }
+    });
+  }
+
+  APP.OFFICES[office].tafs.forEach(station => {
+    if (!officeOut.tafs[station]) {
+      officeOut.tafs[station] = makeUnavailable_(tafProduct, 'No current TAF returned',
+        `https://aviationweather.gov/data/taf/?ids=${station}`);
+    }
+  });
+
+  const tafStates = APP.OFFICES[office].tafs.map(s => officeOut.tafs[s]);
+  const worst = tafStates.sort((a,b) => tafStateRank_(b.state) - tafStateRank_(a.state))[0];
+  officeOut.products.TAF = newest
+    ? Object.assign(makeStatus_(tafProduct, newest, now, {
+        source: 'NWS Aviation Weather Center',
+        sourceUrl: `https://aviationweather.gov/data/taf/?ids=${APP.OFFICES[office].tafs.join(',')}`
+      }), {
+        state: worst ? worst.state : 'good',
+        note: worst && worst.cycleNote ? `Worst station: ${worst.cycleNote}` : 'TAF cycle monitor'
+      })
+    : makeUnavailable_(tafProduct, 'No current TAFs returned', 'https://aviationweather.gov/data/taf/');
+}
+
+function makeTafCycleStatus_(station, issued, now) {
+  const expected = latestExpectedTafIssue_(now);
+  // Allow a TAF issued shortly before the nominal :20 checkpoint to count as
+  // the new cycle.  Some sites publish a few minutes early.
+  const cycleReceived = issued.getTime() >= expected.getTime() - 15 * 60000;
+  const overdueMin = Math.max(0, (now.getTime() - expected.getTime()) / 60000);
+  let state = 'good';
+  let cycleNote = 'Current cycle received';
+  if (!cycleReceived) {
+    if (overdueMin >= 25) {
+      state = 'late';
+      cycleNote = `OUTDATED — expected by ${fmtUtcHm_(expected)}Z`;
+    } else if (overdueMin >= 10) {
+      state = 'warn';
+      cycleNote = `AGING — expected by ${fmtUtcHm_(expected)}Z`;
+    } else {
+      state = 'good';
+      cycleNote = `Cycle due ${fmtUtcHm_(expected)}Z — grace period`;
+    }
+  }
+  return {
+    key: 'TAF', label: station, state,
+    issuedAt: issued.toISOString(),
+    ageHours: Math.max(0, (now-issued)/3600000),
+    source: 'NWS Aviation Weather Center',
+    sourceUrl: `https://aviationweather.gov/data/taf/?ids=${station}`,
+    expectedIssueAt: expected.toISOString(),
+    cycleReceived,
+    cycleNote
+  };
+}
+
+function latestExpectedTafIssue_(now) {
+  // User-requested schedule: :20 during the hour before 00/06/12/18Z,
+  // i.e. 23:20, 05:20, 11:20 and 17:20 UTC.
+  const d = new Date(now.getTime());
+  const base = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0);
+  const candidates = [];
+  [-1,0].forEach(dayOffset => {
+    [23,5,11,17].forEach(h => candidates.push(new Date(base + dayOffset*86400000 + (h*60+20)*60000)));
+  });
+  candidates.sort((a,b)=>b-a);
+  return candidates.find(x => x <= now) || new Date(base - 40*60000);
+}
+function fmtUtcHm_(d){ return String(d.getUTCHours()).padStart(2,'0') + String(d.getUTCMinutes()).padStart(2,'0'); }
+function tafStateRank_(s){ return ({late:4,warn:3,na:2,good:1})[s] || 0; }
+
+function makeRvfStatus_(cfg, json, code, now) {
+  const issued = ok_(code) && json ? parseDate_(json.issuanceTime || json.issueTime || json.generatedAt) : null;
+  const ageHours = issued ? Math.max(0, (now - issued) / 3600000) : null;
+  let state = 'na';
+  if (issued) state = ageState_(ageHours);
+  return {
+    pil: cfg.pil,
+    rfc: cfg.rfc,
+    note: cfg.note || '',
+    state,
+    issuedAt: issued ? issued.toISOString() : null,
+    ageHours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
+    warnHours: APP.PRODUCT_AGE_WARN_HOURS,
+    lateHours: APP.PRODUCT_AGE_LATE_HOURS,
+    sourceUrl: `https://forecast.weather.gov/product.php?site=NWS&issuedby=${cfg.location}&product=RVF&format=CI&version=1&glossary=0`,
+    source: issued ? `${cfg.rfc} River Forecast` : `RVF unavailable (${code})`
+  };
+}
+
+// =============================================================================
+// Radar helpers
+// =============================================================================
+
+function makeRadarApiStatus_(cfg, json, code, now) {
+  const liveUrl = cfg.spg ? 'https://www.weather.gov/nl2/SPGView' : 'https://www.weather.gov/nl2/NEXRADView';
+  const apiUrl = `https://api.weather.gov/radar/stations/${encodeURIComponent(cfg.id)}`;
+  if (!ok_(code) || !json) {
+    return {
+      id: cfg.id, type: cfg.type, note: cfg.displayNote || '', state: 'na',
+      status: `Radar API unavailable (${code})`, lastDataAt: null, latencySeconds: null,
+      source: 'NWS Radar Status API', sourceUrl: apiUrl, liveUrl,
+      ftmUrl: `https://forecast.weather.gov/product.php?site=NWS&issuedby=${cfg.ftm}&product=FTM&format=CI&version=1&glossary=0`
+    };
+  }
+
+  const root = json.properties || json;
+  const rda = root.rda || json.rda || {};
+  const rdaProps = rda.properties || rda;
+  const latency = root.latency || json.latency || {};
+  const latProps = latency.properties || latency;
+  const rawStatus = String(rdaProps.status || root.status || 'Unknown').trim();
+  const last = radarLastDataTime_(latProps, root);
+  const latencySeconds = last ? Math.max(0, Math.round((now.getTime()-last.getTime())/1000)) : null;
+  const normalized = rawStatus.toUpperCase();
+
+  let state = 'na', label = rawStatus || 'Unknown';
+  if (/OPERATE/.test(normalized) && !/NOT\s+OPERATE/.test(normalized)) state = 'good';
+  else if (/OFFLINE|NOT\s+OPERATE|INOPER|FAILED/.test(normalized)) state = 'late';
+  else if (/STANDBY|RESTART|START[- ]?UP|MAINT/.test(normalized)) state = 'warn';
+
+  // Match ROC/NEXRAD status practice: fresh data <5 min green; 5–30 min
+  // delayed/aging; >=30 min stale/out.  RDA OFFLINE always remains red.
+  if (latencySeconds != null) {
+    if (latencySeconds >= 1800) state = 'late';
+    else if (latencySeconds >= 300 && state !== 'late') state = 'warn';
+    else if (latencySeconds < 300 && state === 'na' && /OPERATE/.test(normalized)) state = 'good';
+  }
+
+  return {
+    id: cfg.id,
+    type: cfg.type,
+    note: cfg.displayNote || '',
+    state,
+    status: label,
+    lastDataAt: last ? last.toISOString() : null,
+    latencySeconds,
+    source: 'NWS Radar Status API',
+    sourceUrl: apiUrl,
+    liveUrl,
+    ftmUrl: `https://forecast.weather.gov/product.php?site=NWS&issuedby=${cfg.ftm}&product=FTM&format=CI&version=1&glossary=0`
+  };
+}
+
+function radarLastDataTime_(latency, root) {
+  const candidates = [
+    latency && latency.levelTwoLastReceivedTime,
+    latency && latency.levelThreeLastReceivedTime,
+    latency && latency.lastReceivedTime,
+    root && root.levelTwoLastReceivedTime,
+    root && root.levelThreeLastReceivedTime
+  ];
+  for (let i=0;i<candidates.length;i++) {
+    const d=parseDate_(candidates[i]); if(d) return d;
+  }
+  // Defensive fallback for API schema additions: choose the newest ISO date
+  // within the latency object only.
+  const found=[];
+  (function walk(v){
+    if(v==null) return;
+    if(typeof v==='string'){ const d=parseDate_(v); if(d) found.push(d); return; }
+    if(typeof v==='object') Object.keys(v).forEach(k=>walk(v[k]));
+  })(latency);
+  if(!found.length) return null;
+  found.sort((a,b)=>b-a); return found[0];
+}
+
+// =============================================================================
+// NOAA Weather Radio status helpers
+// =============================================================================
+function getNwrStatuses_() {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'nwr-status-v5';
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (e) {}
+  }
+
+  const out = {};
+  Object.keys(APP.OFFICES).forEach(o => out[o] = []);
+  const fetchedAt = new Date();
+
+  // Source 1: national NWR outage/degraded registry. This is report-based,
+  // not live RF telemetry. It remains useful, but a local PNS can be newer
+  // or can describe an outage that has not yet propagated to the national map.
+  let html = '', nationalOk = false;
+  try {
+    const resp = UrlFetchApp.fetch('https://www.weather.gov/nwr/outages', {
+      method:'get', headers:{'User-Agent':APP.USER_AGENT,'Accept':'text/html'},
+      muteHttpExceptions:true, followRedirects:true
+    });
+    nationalOk = ok_(resp.getResponseCode());
+    if (nationalOk) html = resp.getContentText('UTF-8');
+  } catch(e) {}
+  const nationalText = nationalOk ? stripHtml_(html).toUpperCase().replace(/-/g,'') : '';
+
+  // Source 2: deep local PNS history. This deliberately goes much farther
+  // back than the previous 24 products because an "until further notice"
+  // NWR outage can remain active for weeks/months and is only cleared by a
+  // later restoration statement. We also follow product-API pagination.
+  const pnsByOffice = {};
+  Object.keys(APP.OFFICES).forEach(office => {
+    pnsByOffice[office] = getRecentNwrPnsMentions_(office, APP.OFFICES[office].nwr || [], fetchedAt);
+  });
+
+  Object.keys(APP.OFFICES).forEach(office => {
+    (APP.OFFICES[office].nwr || []).forEach(cfg => {
+      const id = normalizeNwrId_(cfg.id);
+      const pns = (pnsByOffice[office] || {})[id] || null;
+      let status = nationalOk ? 'Online' : 'Status unavailable';
+      let state = nationalOk ? 'good' : 'na';
+      let details = '';
+      let source = nationalOk ? 'National NWR registry' : 'NWR registry unavailable';
+      let sourceUrl = 'https://www.weather.gov/nwr/outages';
+
+      if (nationalOk) {
+        const pos = nationalText.indexOf(id);
+        if (pos >= 0) {
+          const chunk = nationalText.slice(Math.max(0,pos-300), pos+700);
+          if (/OUT\s+OF\s+SERVICE|OFFLINE|OUTAGE|OFF\s+AIR|NON\s*OPERATIONAL/.test(chunk)) {
+            status='Out of Service'; state='late'; details='Listed by national NWR outage service';
+          } else if (/DEGRADED|REDUCED\s+POWER|LIMITED\s+COVERAGE|INTERMITTENT/.test(chunk)) {
+            status='Degraded'; state='warn'; details='Listed by national NWR degraded-service registry';
+          }
+        }
+      }
+
+      // Newest local callsign/location/office-wide PNS mention wins over the
+      // national registry. Persistent outages stay red until a later PNS says
+      // restored. Time-limited maintenance notices expire automatically.
+      if (pns) {
+        source = 'Local NWS PNS + national NWR registry';
+        // Keep the card click-through anchored to the official NWR status page.
+        // The local PNS is retained as metadata but does not replace the status-page link.
+        sourceUrl = 'https://www.weather.gov/nwr/outages';
+        details = pns.summary || details;
+        if (pns.status === 'out') { status='Out of Service'; state='late'; }
+        else if (pns.status === 'degraded') { status='Degraded'; state='warn'; }
+        else if (pns.status === 'restored') { status='Restored / reported operational'; state='good'; }
+        else if (pns.status === 'scheduled') { status='Scheduled / temporary outage'; state='warn'; }
+      }
+
+      if (status === 'Online') {
+        details = 'No outage/degraded condition is listed on the official NWR status page and no unresolved local PNS outage was found.';
+      }
+
+      out[office].push({
+        id:cfg.id, name:cfg.name, mhz:cfg.mhz, status, state,
+        checkedAt:fetchedAt.toISOString(), details,
+        source, pnsUpdatedAt:pns && pns.issuedAt || null,
+        sourceUrl,
+        outageUrl:'https://www.weather.gov/nwr/outages'
+      });
+    });
+  });
+
+  try { cache.put(cacheKey, JSON.stringify(out), 300); } catch(e) {}
+  return out;
+}
+
+function normalizeNwrId_(v) {
+  return String(v || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+}
+
+function normalizePlace_(v) {
+  return String(v || '').toUpperCase().replace(/[^A-Z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+}
+
+function fetchPnsHistoryRefs_(office, maxProducts) {
+  const refs = [];
+  const seen = {};
+  let url = `https://api.weather.gov/products/types/PNS/locations/${encodeURIComponent(office)}`;
+  let pages = 0;
+  const headers = {'User-Agent':APP.USER_AGENT,'Accept':'application/geo+json, application/json'};
+  while (url && refs.length < maxProducts && pages < 8) {
+    pages++;
+    let resp;
+    try {
+      resp = UrlFetchApp.fetch(url, {method:'get',headers,muteHttpExceptions:true,followRedirects:true});
+    } catch(e) { break; }
+    if (!ok_(resp.getResponseCode())) break;
+    const j = safeJson_(resp) || {};
+    const graph = j['@graph'] || j.products || j.items || [];
+    if (Array.isArray(graph)) {
+      graph.forEach(x => {
+        if (!x || refs.length >= maxProducts) return;
+        const id = String(x.id || x.identifier || '').trim();
+        const apiUrl = String(x['@id'] || x.url || (id ? `https://api.weather.gov/products/${encodeURIComponent(id)}` : '')).trim();
+        if (!apiUrl || seen[apiUrl]) return;
+        seen[apiUrl] = true;
+        refs.push({url:apiUrl, issuedAt:x.issuanceTime || x.issueTime || x.generatedAt || null});
+      });
+    }
+    const pag = j.pagination || {};
+    const next = pag.next || j.next || null;
+    url = next && String(next) !== url ? String(next) : null;
+  }
+  return refs.slice(0,maxProducts);
+}
+
+function getRecentNwrPnsMentions_(office, configs, now) {
+  const result = {};
+  if (!configs || !configs.length) return result;
+  now = now || new Date();
+
+  const refs = fetchPnsHistoryRefs_(office, APP.NWR_PNS_MAX_PRODUCTS);
+  if (!refs.length) return result;
+  const cutoff = now.getTime() - APP.NWR_PNS_MAX_AGE_DAYS * 86400000;
+  const useful = refs.filter(r => {
+    const d = parseDate_(r.issuedAt);
+    return !d || d.getTime() >= cutoff;
+  }).slice(0, APP.NWR_PNS_MAX_PRODUCTS);
+
+  const reqs = useful.map(x => ({
+    url:x.url, method:'get',
+    headers:{'User-Agent':APP.USER_AGENT,'Accept':'application/geo+json, application/json'},
+    muteHttpExceptions:true, followRedirects:true
+  }));
+  let responses=[];
+  try { responses = fetchAllChunked_(reqs, 35); } catch(e) { return result; }
+
+  responses.forEach((resp, i) => {
+    if (!resp || !ok_(resp.getResponseCode())) return;
+    const j=safeJson_(resp); if(!j) return;
+    const text=String(j.productText || j.product || j.text || '').replace(/\r/g,'');
+    if (!/NOAA\s+WEATHER\s+RADIO|WEATHER\s+RADIO|\bNWR\b/i.test(text)) return;
+    const issued = parseDate_(j.issuanceTime || (useful[i] && useful[i].issuedAt));
+    if (issued && issued.getTime() < cutoff) return;
+
+    const upper = text.toUpperCase();
+    const norm = normalizeNwrId_(text);
+    const officeWide = /ALL\s+(?:NOAA\s+WEATHER\s+RADIO|NWR)\s+(?:TRANSMITTERS|STATIONS|BROADCASTS)[\s\S]{0,120}(?:DOWN|OFF\s+THE\s+AIR|OFF\s+AIR|OUT\s+OF\s+SERVICE)/i.test(text) ||
+      /ALL\s+(?:NWR|NOAA\s+WEATHER\s+RADIO)\s+(?:TRANSMITTERS|STATIONS)[\s\S]{0,180}UNTIL\s+FURTHER\s+NOTICE/i.test(text);
+
+    configs.forEach(cfg => {
+      const id=normalizeNwrId_(cfg.id);
+      const city = normalizePlace_(String(cfg.name||'').split(',')[0]);
+      const cityMatch = city && upper.indexOf(city) >= 0;
+      const callMatch = norm.indexOf(id) >= 0;
+      if (!officeWide && !callMatch && !cityMatch) return;
+
+      const old=result[id];
+      if (old && old.issuedAt && issued && new Date(old.issuedAt) >= issued) return;
+
+      let pos = -1;
+      const rawId = String(cfg.id||'').toUpperCase();
+      pos = upper.indexOf(rawId);
+      if (pos < 0) pos = upper.indexOf(String(cfg.name||'').split(',')[0].toUpperCase());
+      if (pos < 0) pos = 0;
+      const chunk=text.slice(Math.max(0,pos-700), Math.min(text.length,pos+1800));
+      const classified = classifyNwrPns_(chunk, text, issued, now);
+      if (!classified) return;
+
+      result[id]={
+        status:classified.status,
+        issuedAt:issued?issued.toISOString():null,
+        summary:stripNwrPnsSummary_(chunk),
+        url:String(j['@id'] || j.id || (useful[i] && useful[i].url) || ''),
+        persistent:classified.persistent || false
+      };
+    });
+  });
+  return result;
+}
+
+function classifyNwrPns_(chunk, fullText, issued, now) {
+  const t = String(chunk || '') + '\n' + String(fullText || '');
+  if (/RESTORED|RETURNED\s+TO\s+SERVICE|BACK\s+(?:ON|IN)\s+(?:THE\s+)?AIR|BACK\s+IN\s+SERVICE|IS\s+BACK\s+IN\s+SERVICE|OPERATIONAL\s+AGAIN/i.test(t)) {
+    return {status:'restored', persistent:false};
+  }
+  const out = /OUT\s+OF\s+SERVICE|OFF\s+THE\s+AIR|OFF\s+AIR|NOT\s+TRANSMITTING|TRANSMITTER\s+(?:IS\s+)?DOWN|BROADCAST\s+(?:IS\s+)?UNAVAILABLE|SERVICE\s+OUTAGE|CURRENTLY\s+DOWN|WILL\s+REMAIN\s+OFFLINE/i.test(t);
+  const degraded = /DEGRADED|INTERMITTENT|REDUCED\s+POWER|LIMITED\s+COVERAGE/i.test(t);
+  if (!out && !degraded) return null;
+
+  const persistent = /UNTIL\s+FURTHER\s+NOTICE|NO\s+(?:ESTIMATE|ESTIMATED)\s+(?:TIME|DATE)|RETURN\s+TO\s+SERVICE\s+(?:IS\s+)?UNKNOWN|UNKNOWN\s+(?:RETURN|RESTORATION)/i.test(t);
+  if (persistent) return {status:out?'out':'degraded', persistent:true};
+
+  // If the PNS clearly describes a short scheduled/temporary window and that
+  // statement is now old, do not keep it as a current outage indefinitely.
+  const ageHours = issued ? Math.max(0,(now-issued)/3600000) : 0;
+  const temporary = /THROUGH\s+(?:THIS\s+)?(?:MORNING|AFTERNOON|EVENING|TONIGHT)|FROM\s+\d{1,4}\s*(?:AM|PM)?\s+(?:TO|THROUGH|UNTIL)\s+\d{1,4}|SCHEDULED|ROUTINE\s+MAINTENANCE|FOR\s+MAINTENANCE/i.test(t);
+  if (temporary && ageHours > 36) return null;
+  if (degraded) return {status:'degraded', persistent:false};
+  return {status: temporary ? 'scheduled' : 'out', persistent:false};
+}
+
+function stripNwrPnsSummary_(text) {
+  return String(text||'').replace(/\s+/g,' ').trim().slice(0,420);
+}
+
+function stripHtml_(s) {
+  return String(s||'').replace(/<script\b[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')
+    .replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&#39;/g,"'")
+    .replace(/&quot;/gi,'"').replace(/\s+/g,' ').trim();
+}
+
+
+function fetchRecentRiverWarningProducts_(office, headers, now) {
+  const products = [];
+  ['FLW', 'FLS'].forEach(type => {
+    const historyUrl = `https://api.weather.gov/products/types/${type}/locations/${encodeURIComponent(office)}`;
+    let resp;
+    try {
+      resp = UrlFetchApp.fetch(historyUrl, {
+        method: 'get', headers, muteHttpExceptions: true, followRedirects: true
+      });
+    } catch (e) {
+      return;
+    }
+    if (!ok_(resp.getResponseCode())) return;
+    const refs = extractRvfProductRefs_(safeJson_(resp))
+      .filter(r => {
+        const t = parseDate_(r.issuedAt);
+        return !t || (now.getTime() - t.getTime()) <= 10 * 86400000;
+      })
+      .slice(0, 50);
+    if (!refs.length) return;
+
+    const resps = fetchAllChunked_(refs.map(r => req_(r.url, headers)), 25);
+    resps.forEach((r, i) => {
+      if (!r || !ok_(r.getResponseCode())) return;
+      const j = safeJson_(r);
+      if (!j) return;
+      const text = String(j.productText || j.text || j.body || '');
+      if (!text || !/\.FL\.W\./i.test(text)) return; // river Flood Warnings only
+      const issued = parseDate_(j.issuanceTime || j.issueTime || refs[i].issuedAt) || now;
+      const blocks = extractRiverWarningBlocks_(text, type, issued, refs[i].id);
+      Array.prototype.push.apply(products, blocks);
+    });
+  });
+  products.sort((a, b) => new Date(b.issuedAt) - new Date(a.issuedAt));
+  return products;
+}
+
+function extractRiverWarningBlocks_(text, productType, issued, productId) {
+  const out = [];
+  const re = /\/O\.(NEW|CON|EXT|EXA|EXB|CAN|EXP)\.[A-Z]{4}\.FL\.W\.(\d{4})\.(\d{6}T\d{4}Z)-(\d{6}T\d{4}Z)\//ig;
+  const matches = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    matches.push({
+      index: m.index,
+      action: m[1].toUpperCase(),
+      etn: m[2],
+      begin: parseVtecTime_(m[3]),
+      end: parseVtecTime_(m[4])
+    });
+  }
+  if (!matches.length) return out;
+
+  matches.forEach((x, i) => {
+    let start = x.index;
+    let stop = (i + 1 < matches.length) ? matches[i + 1].index : text.length;
+    // River-specific FLW/FLS sections carry the WHERE/location after the VTEC
+    // line. Starting at the VTEC keeps neighboring river warnings from matching.
+    const chunk = text.slice(start, stop);
+    out.push({
+      productType,
+      action: x.action,
+      etn: x.etn,
+      begin: x.begin ? x.begin.toISOString() : null,
+      expiresAt: x.end ? x.end.toISOString() : null,
+      issuedAt: issued.toISOString(),
+      productId: productId || '',
+      sourceUrl: productId
+        ? `https://api.weather.gov/products/${encodeURIComponent(productId)}`
+        : `https://forecast.weather.gov/product.php?site=NWS&product=${productType}`,
+      text: chunk
+    });
+  });
+  return out;
+}
+
+function parseVtecTime_(s) {
+  const m = String(s || '').match(/^(\d{2})(\d{2})(\d{2})T(\d{2})(\d{2})Z$/);
+  if (!m) return null;
+  if (m[1] === '00' && m[2] === '00' && m[3] === '00') return null;
+  const yy = Number(m[1]);
+  const year = yy >= 70 ? 1900 + yy : 2000 + yy;
+  return new Date(Date.UTC(year, Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])));
+}
+
+function findRiverWarningStatus_(river, products, now) {
+  const matches = (products || []).filter(p => warningBlockMatchesRiver_(river, p.text));
+  if (!matches.length) {
+    return {
+      active: false,
+      action: null,
+      productType: null,
+      lastUpdated: null,
+      expiresAt: null,
+      sourceUrl: null
+    };
+  }
+
+  matches.sort((a, b) => new Date(b.issuedAt) - new Date(a.issuedAt));
+  const p = matches[0];
+  const activeAction = ['NEW', 'CON', 'EXT', 'EXA', 'EXB'].indexOf(p.action) >= 0;
+  const end = parseDate_(p.expiresAt);
+  const active = activeAction && (!end || end.getTime() > now.getTime());
+
+  return {
+    active,
+    action: p.action,
+    productType: p.productType,
+    lastUpdated: p.issuedAt,
+    expiresAt: p.expiresAt,
+    sourceUrl: p.sourceUrl,
+    etn: p.etn
+  };
+}
+
+function warningBlockMatchesRiver_(river, text) {
+  const hay = normalizeMatchText_(text);
+  const id = normalizeMatchText_(river.id || '');
+  if (id && new RegExp(`\\b${escapeRegex_(id)}\\b`, 'i').test(hay)) return true;
+
+  const name = String(river.name || '');
+  const full = normalizeMatchText_(name);
+  if (full && full.length >= 8 && hay.indexOf(full) >= 0) return true;
+
+  // RVF names are commonly "River Name - Location". Requiring both halves
+  // avoids matching every gauge on the same river when one point is warned.
+  const parts = name.split(/\s+-\s+/);
+  if (parts.length >= 2) {
+    const riverPart = normalizeMatchText_(parts[0]);
+    const locPart = normalizeMatchText_(parts.slice(1).join(' '));
+    const locCore = significantWords_(locPart).join(' ');
+    const riverWords = significantWords_(riverPart);
+    const riverCore = riverWords.slice(0, Math.min(3, riverWords.length)).join(' ');
+    if (locCore && hay.indexOf(locCore) >= 0 && riverCore && hay.indexOf(riverCore) >= 0) return true;
+  }
+
+  // Fallback: location plus any distinctive river token.
+  const words = significantWords_(full);
+  if (words.length >= 3) {
+    const loc = words[words.length - 1];
+    const distinctive = words.filter(w => w !== loc && w.length >= 5);
+    if (hay.indexOf(loc) >= 0 && distinctive.some(w => hay.indexOf(w) >= 0)) return true;
+  }
+  return false;
+}
+
+function normalizeMatchText_(s) {
+  return String(s || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function significantWords_(s) {
+  const stop = {
+    RIVER:1, CREEK:1, BAYOU:1, FORK:1, LAKE:1, AT:1, NEAR:1, ABOVE:1, BELOW:1,
+    THE:1, OF:1, AND:1, DAM:1, LOCK:1, NR:1
+  };
+  return normalizeMatchText_(s).split(' ').filter(w => w.length >= 3 && !stop[w]);
+}
+
+function escapeRegex_(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function warningCheckRank_(v) {
+  return ({ missing: 4, covered: 3, 'active-below-minor': 2, none: 0 })[v] || 0;
+}
+
+// =============================================================================
+// River helpers
+// =============================================================================
+
+function extractGaugeArray_(root) {
+  const best = [];
+  function visit(v, depth) {
+    if (depth > 7 || v == null) return;
+    if (Array.isArray(v)) {
+      const gaugeish = v.filter(x => x && typeof x === 'object' && gaugeId_(x)).length;
+      if (gaugeish >= Math.max(1, Math.floor(v.length * 0.25))) {
+        v.forEach(x => { if (x && typeof x === 'object' && gaugeId_(x)) best.push(x); });
+        return;
+      }
+      v.forEach(x => visit(x, depth + 1));
+      return;
+    }
+    if (typeof v === 'object') Object.keys(v).forEach(k => visit(v[k], depth + 1));
+  }
+  visit(root, 0);
+  return dedupeGauges_(best);
+}
+
+function dedupeGauges_(arr) {
+  const seen = {};
+  return arr.filter(g => {
+    const id = gaugeId_(g);
+    if (!id || seen[id]) return false;
+    seen[id] = true;
+    return true;
+  });
+}
+
+function gaugeId_(g) {
+  if (!g || typeof g !== 'object') return '';
+  const values = [g.identifier, g.lid, g.LID, g.id, g.gaugeId, g.gauge_id, g.nwsLid];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (typeof v === 'string' && /^[A-Za-z0-9]{4,8}$/.test(v.trim())) return v.trim().toUpperCase();
+  }
+  if (g.lids && typeof g.lids === 'object') {
+    const v = g.lids.lid || g.lids.identifier;
+    if (v) return String(v).toUpperCase();
+  }
+  return '';
+}
+
+function gaugeWfo_(g) {
+  function scan(v, depth) {
+    if (depth > 4 || v == null) return '';
+    if (typeof v === 'string') {
+      const m = v.toUpperCase().match(/\b(MOB|LIX|TAE|KEY)\b/);
+      return m ? m[1] : '';
+    }
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) { const hit = scan(v[i], depth + 1); if (hit) return hit; }
+      return '';
+    }
+    if (typeof v === 'object') {
+      const preferred = [v.abbreviation, v.id, v.identifier, v.name, v.wfo, v.WFO, v.weatherForecastOffice, v.office];
+      for (let i = 0; i < preferred.length; i++) { const hit = scan(preferred[i], depth + 1); if (hit) return hit; }
+    }
+    return '';
+  }
+  const direct = scan([g.wfo, g.WFO, g.weatherForecastOffice, g.office], 0);
+  if (direct) return direct;
+  // Last-resort shallow JSON match only.
+  const s = JSON.stringify(g).slice(0, 5000).toUpperCase();
+  const m = s.match(/"(?:WFO|ABBREVIATION|IDENTIFIER|ID)"\s*:\s*"(?:K)?(MOB|LIX|TAE|KEY)"/);
+  return m ? m[1] : '';
+}
+
+function gaugeName_(g, id) {
+  const c = [g.name, g.locationName, g.gaugeName, g.description, g.title, g.location];
+  for (let i = 0; i < c.length; i++) if (typeof c[i] === 'string' && c[i].trim()) return c[i].trim();
+  return id;
+}
+
+function gaugeRfc_(g) {
+  const v = g.rfc || g.RFC || g.riverForecastCenter;
+  if (typeof v === 'string') return v.toUpperCase();
+  if (v && typeof v === 'object') return String(v.abbreviation || v.id || v.identifier || '').toUpperCase();
+  return '';
+}
+
+function makeRiver_(gauge, id, stageJson, code, now) {
+  const thresholds = extractFloodThresholds_(gauge);
+  // Stageflow response can also carry richer threshold metadata.
+  mergeThresholds_(thresholds, extractFloodThresholds_(stageJson));
+
+  const series = extractStageSeries_(stageJson);
+  const observed = latestPoint_(series.observed);
+  const forecast = maxPoint_(series.forecast, now);
+  const unit = observed.unit || forecast.unit || findUnit_(stageJson) || 'ft';
+
+  const obsCat = categoryFor_(observed.value, thresholds);
+  const fcstCat = categoryFor_(forecast.value, thresholds);
+
+  return {
+    id,
+    name: gaugeName_(gauge, id),
+    rfc: gaugeRfc_(gauge),
+    state: ok_(code) ? 'good' : 'na',
+    observed: observed.value,
+    observedTime: observed.time ? observed.time.toISOString() : null,
+    observedCategory: obsCat,
+    forecast: forecast.value,
+    forecastTime: forecast.time ? forecast.time.toISOString() : null,
+    forecastCategory: fcstCat,
+    unit,
+    thresholds,
+    sourceUrl: `https://water.noaa.gov/gauges/${id.toLowerCase()}`
+  };
+}
+
+function extractStageSeries_(root) {
+  const out = { observed: [], forecast: [] };
+  function visit(v, path, depth) {
+    if (depth > 10 || v == null) return;
+    if (Array.isArray(v)) {
+      v.forEach((x, i) => visit(x, `${path}[${i}]`, depth + 1));
+      return;
+    }
+    if (typeof v !== 'object') return;
+
+    const val = firstNumber_([v.value, v.stage, v.primary, v.y, v.magnitude]);
+    const time = parseDate_(v.validTime || v.valid_time || v.time || v.timestamp || v.dateTime || v.datetime || v.observedTime || v.forecastTime);
+    if (val != null && time) {
+      const p = path.toLowerCase();
+      const unit = String(v.unit || v.units || v.unitCode || '').replace(/^.*:/, '');
+      if (/forecast|fcst|future/.test(p)) out.forecast.push({ value: val, time, unit });
+      else if (/observ|obs|actual/.test(p)) out.observed.push({ value: val, time, unit });
+    }
+    Object.keys(v).forEach(k => visit(v[k], path ? `${path}.${k}` : k, depth + 1));
+  }
+  visit(root, '', 0);
+  return out;
+}
+
+function latestPoint_(arr) {
+  if (!arr || !arr.length) return { value: null, time: null, unit: '' };
+  arr.sort((a, b) => b.time - a.time);
+  return arr[0];
+}
+
+function maxPoint_(arr, now) {
+  if (!arr || !arr.length) return { value: null, time: null, unit: '' };
+  const futureish = arr.filter(p => p.time.getTime() >= now.getTime() - 3 * 3600000);
+  const use = futureish.length ? futureish : arr;
+  use.sort((a, b) => (b.value - a.value) || (a.time - b.time));
+  return use[0];
+}
+
+function extractFloodThresholds_(root) {
+  const out = { action: null, minor: null, moderate: null, major: null };
+  function visit(v, path, depth) {
+    if (depth > 8 || v == null) return;
+    if (Array.isArray(v)) return v.forEach((x, i) => visit(x, `${path}[${i}]`, depth + 1));
+    if (typeof v !== 'object') return;
+    Object.keys(v).forEach(k => {
+      const nv = v[k];
+      const p = `${path}.${k}`.toLowerCase();
+      const num = typeof nv === 'number' ? nv : (typeof nv === 'string' && /^-?\d+(\.\d+)?$/.test(nv.trim()) ? Number(nv) : null);
+      if (num != null) {
+        if (/major/.test(p) && /(stage|flood|value|threshold|category)/.test(p)) out.major = chooseThreshold_(out.major, num);
+        else if (/moderate/.test(p) && /(stage|flood|value|threshold|category)/.test(p)) out.moderate = chooseThreshold_(out.moderate, num);
+        else if (/minor/.test(p) && /(stage|flood|value|threshold|category)/.test(p)) out.minor = chooseThreshold_(out.minor, num);
+        else if (/action/.test(p) && /(stage|flood|value|threshold|category)/.test(p)) out.action = chooseThreshold_(out.action, num);
+      }
+      visit(nv, p, depth + 1);
+    });
+  }
+  visit(root, '', 0);
+  return out;
+}
+
+function chooseThreshold_(oldVal, newVal) {
+  if (newVal == null || !isFinite(newVal)) return oldVal;
+  if (oldVal == null) return newVal;
+  return oldVal; // retain first matching value; NWPS primary stage generally appears first
+}
+
+function mergeThresholds_(a, b) {
+  ['action','minor','moderate','major'].forEach(k => { if (a[k] == null && b[k] != null) a[k] = b[k]; });
+}
+
+function categoryFor_(value, t) {
+  if (value == null || !isFinite(value)) return 'na';
+  if (t.major != null && value >= t.major) return 'major';
+  if (t.moderate != null && value >= t.moderate) return 'moderate';
+  if (t.minor != null && value >= t.minor) return 'minor';
+  if (t.action != null && value >= t.action) return 'action';
+  return 'normal';
+}
+
+function severityRank_(cat) {
+  return ({ na: -1, normal: 0, action: 1, minor: 2, moderate: 3, major: 4 })[cat] ?? -1;
+}
+
+function findUnit_(obj) {
+  let unit = '';
+  function visit(v, depth) {
+    if (unit || depth > 6 || v == null) return;
+    if (Array.isArray(v)) return v.forEach(x => visit(x, depth + 1));
+    if (typeof v !== 'object') return;
+    ['unit','units','unitCode'].forEach(k => {
+      if (!unit && typeof v[k] === 'string' && /ft|feet|foot|m\b|kcfs|cfs/i.test(v[k])) unit = v[k].replace(/^.*:/, '');
+    });
+    Object.keys(v).forEach(k => visit(v[k], depth + 1));
+  }
+  visit(obj, 0);
+  return unit;
+}
+
+// =============================================================================
+// Generic helpers
+// =============================================================================
+
+function req_(url, headers) {
+  return { url, method: 'get', headers: headers || {}, muteHttpExceptions: true, followRedirects: true };
+}
+
+function fetchAllChunked_(requests, size) {
+  const out = [];
+  for (let i = 0; i < requests.length; i += size) {
+    const chunk = requests.slice(i, i + size);
+    const got = UrlFetchApp.fetchAll(chunk);
+    Array.prototype.push.apply(out, got);
+  }
+  return out;
+}
+
+function safeJson_(resp) {
+  try { return JSON.parse(resp.getContentText()); } catch (e) { return null; }
+}
+
+function ok_(code) { return code >= 200 && code < 300; }
+function product_(key) { return APP.PRODUCTS.find(p => p.key === key); }
+
+function ageState_(ageHours) {
+  if (ageHours == null || !isFinite(ageHours)) return 'na';
+  if (ageHours >= APP.PRODUCT_AGE_LATE_HOURS) return 'late';
+  if (ageHours >= APP.PRODUCT_AGE_WARN_HOURS) return 'warn';
+  return 'good';
+}
+
+function makeStatus_(product, issued, now, extra) {
+  const ageHours = Math.max(0, (now.getTime() - issued.getTime()) / 3600000);
+  const state = ageState_(ageHours);
+  return Object.assign({
+    key: product.key,
+    label: product.label,
+    state,
+    issuedAt: issued.toISOString(),
+    ageHours: Math.round(ageHours * 10) / 10,
+    warnHours: APP.PRODUCT_AGE_WARN_HOURS,
+    lateHours: APP.PRODUCT_AGE_LATE_HOURS
+  }, extra || {});
+}
+
+function makeUnavailable_(product, reason, url) {
+  return {
+    key: product.key,
+    label: product.label,
+    state: 'na',
+    issuedAt: null,
+    ageHours: null,
+    warnHours: APP.PRODUCT_AGE_WARN_HOURS,
+    lateHours: APP.PRODUCT_AGE_LATE_HOURS,
+    source: reason || 'Unavailable',
+    sourceUrl: url || null
+  };
+}
+
+function parseDate_(value) {
+  if (!value) return null;
+  if (value instanceof Date && !isNaN(value)) return value;
+  if (typeof value === 'number') {
+    const millis = value < 1e12 ? value * 1000 : value;
+    const d = new Date(millis);
+    return isNaN(d) ? null : d;
+  }
+  const d = new Date(value);
+  return isNaN(d) ? null : d;
+}
+
+function firstNumber_(values) {
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) return Number(v);
+  }
+  return null;
+}
+
+function extractTafIssue_(item) {
+  const candidates = [item.issueTime, item.issue_time, item.bulletinTime, item.bulletin_time, item.dbPopTime];
+  for (let i = 0; i < candidates.length; i++) {
+    const d = parseDate_(candidates[i]);
+    if (d) return d;
+  }
+  const raw = String(item.rawTAF || item.rawText || item.raw || '');
+  const m = raw.match(/\b(\d{2})(\d{2})(\d{2})Z\b/);
+  if (!m) return null;
+  const now = new Date();
+  const year = now.getUTCFullYear(), month = now.getUTCMonth();
+  const day = Number(m[1]), hour = Number(m[2]), minute = Number(m[3]);
+  let d = new Date(Date.UTC(year, month, day, hour, minute));
+  if (d.getTime() - now.getTime() > 7 * 86400000) d = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (now.getTime() - d.getTime() > 35 * 86400000) d = new Date(Date.UTC(year, month + 1, day, hour, minute));
+  return d;
+}
+
+function findBestTimestamp_(obj) {
+  const found = [];
+  walk_(obj, '', found);
+  if (!found.length) return null;
+  found.sort((a, b) => b.score - a.score || b.date.getTime() - a.date.getTime());
+  return found[0].date;
+}
+
+function walk_(value, path, found) {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => walk_(v, `${path}[${i}]`, found));
+    return;
+  }
+  if (typeof value === 'object') {
+    Object.keys(value).forEach(k => walk_(value[k], path ? `${path}.${k}` : k, found));
+    return;
+  }
+  if (typeof value !== 'string' && typeof value !== 'number') return;
+  const d = parseDate_(value);
+  if (!d) return;
+  const y = d.getUTCFullYear();
+  if (y < 2020 || y > 2100) return;
+  const p = path.toLowerCase();
+  let score = 0;
+  if (p.includes('last')) score += 5;
+  if (p.includes('receiv')) score += 5;
+  if (p.includes('update')) score += 4;
+  if (p.includes('hml')) score += 4;
+  if (p.includes('time')) score += 2;
+  if (p.includes('date')) score += 1;
+  if (score) found.push({ date: d, score });
+}
