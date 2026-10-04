@@ -40,6 +40,7 @@ function render(){
   const id=mode==='mob'?'MOB':backup, o=DATA.offices?.[id];
   document.getElementById('content').innerHTML=o?officeHtml(o):'<div class="panel loading">No office data.</div>';
   loadRivers(id);
+  refreshVisibleProductsLive(id);
 }
 function officeHtml(o){
   const products=(DATA.productOrder||Object.keys(o.products||{})).filter(k=>!['TAF','NWPS'].includes(k)).map(k=>productCard(o.products?.[k],k)).join('');
@@ -60,8 +61,47 @@ function section(a,b,body){return '<section class="panel"><div class="section-ti
 function productCard(p,key){
   if(!p)return '<div class="card na"><div><div class="name">'+esc(key)+'</div><div class="small">No data</div></div></div>';
   const state=productAgeState(p.issuedAt);
-  return '<div class="card '+esc(state)+'" onclick="openUrl(\''+esc(p.sourceUrl||'')+'\')"><div><div class="name">'+esc(p.label||key)+'</div><div class="small">'+esc(p.issuedAt?age(p.issuedAt)+' old':'No timestamp')+'</div></div><div>'+esc(p.issuedAt?fmtZ(p.issuedAt):'—')+'</div></div>'
+  return '<div class="card product-card '+esc(state)+'" data-product-key="'+esc(key)+'" onclick="openUrl(\''+esc(p.sourceUrl||'')+'\')"><div><div class="name">'+esc(p.label||key)+'</div><div class="small product-age">'+esc(p.issuedAt?age(p.issuedAt)+' old':'No timestamp')+'</div></div><div class="product-issued">'+esc(p.issuedAt?fmtZ(p.issuedAt):'—')+'</div></div>'
 }
+async function refreshVisibleProductsLive(office){
+  const o=DATA?.offices?.[office];
+  if(!o)return;
+  const keys=Object.keys(o.products||{}).filter(k=>!['TAF','NWPS','GRIDS'].includes(k));
+  await Promise.allSettled(keys.map(async key=>{
+    const url='https://api.weather.gov/products/types/'+encodeURIComponent(key)+'/locations/'+encodeURIComponent(office);
+    const r=await fetch(url,{cache:'no-store',headers:{'Accept':'application/ld+json, application/json'}});
+    if(!r.ok)return;
+    const j=await r.json();
+    const arr=j['@graph']||j.products||j.items||[];
+    if(!Array.isArray(arr)||!arr.length)return;
+    let best=null,bestMs=-Infinity;
+    for(const item of arr){
+      const raw=item?.issuanceTime||item?.issueTime||item?.generatedAt;
+      const ms=raw?Date.parse(raw):NaN;
+      if(Number.isFinite(ms)&&ms>bestMs){bestMs=ms;best={item,raw}}
+    }
+    if(!best)return;
+    const p=o.products[key];
+    const current=p?.issuedAt?Date.parse(p.issuedAt):0;
+    if(bestMs<=current)return;
+    p.issuedAt=new Date(bestMs).toISOString();
+    p.productId=best.item?.id||p.productId||null;
+    p.state=productAgeState(p.issuedAt);
+    updateProductCardLive(key,p);
+  }));
+}
+function updateProductCardLive(key,p){
+  const el=document.querySelector('.product-card[data-product-key="'+CSS.escape(String(key))+'"]');
+  if(!el)return;
+  el.classList.remove('good','warn','late','na');
+  el.classList.add(productAgeState(p.issuedAt));
+  const a=el.querySelector('.product-age');
+  const t=el.querySelector('.product-issued');
+  if(a)a.textContent=p.issuedAt?age(p.issuedAt)+' old':'No timestamp';
+  if(t)t.textContent=p.issuedAt?fmtZ(p.issuedAt):'—';
+}
+function currentOffice(){return mode==='mob'?'MOB':backup}
+
 function tafCard(id,t){
   return '<div class="card taf '+esc(t?.state||'na')+'" onclick="openUrl(\''+esc(t?.sourceUrl||'')+'\')"><div class="name">'+esc(id)+'</div><div class="mini">'+esc(t?.status||t?.label||'No data')+'</div><div class="small">'+esc(t?.issuedAt?fmtZ(t.issuedAt):'—')+'</div></div>'
 }
@@ -105,3 +145,4 @@ function closeModal(){document.getElementById('modal').classList.remove('show');
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
 loadData(false);
 setInterval(()=>loadData(false),Number(window.STATUS_BOARD_CONFIG?.REFRESH_MS)||120000);
+setInterval(()=>refreshVisibleProductsLive(currentOffice()),60000);
