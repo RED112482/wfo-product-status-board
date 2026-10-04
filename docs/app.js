@@ -81,9 +81,8 @@ function hazardPanel(o){
   if(!list.length)return section('Long-Fused Hazards','NPW / FAA / MWW / WSW / CFW / RFW / TCV','<div class="clear">● No active long-fused hazards</div>');
   const cards=list.map(h=>{
     const code=h.displayProduct||h.product||'';
-    const sub=(h.subHazards||[]).length?'<div class="small">Contains: '+esc(h.subHazards.join(' · '))+'</div>':'';
     const state=productAgeState(h.updatedAt);
-    return '<div class="card hazard '+esc(state)+'" onclick="openUrl(\''+esc(h.sourceUrl||'')+'\')"><div class="hazard-head"><div class="name">'+esc(h.event||h.headline||code)+'</div><span class="pill">'+esc(code+(h.action?' · '+h.action:''))+'</span></div>'+sub+'<div class="hazard-time">Expires '+esc(fmtZ(h.expiresAt))+' · '+esc(until(h.expiresAt))+'</div><div class="small">Updated '+esc(fmtZ(h.updatedAt))+(h.endsAt?' · Hazard valid until '+esc(fmtZ(h.endsAt)):'')+'</div><div class="small">'+esc(h.areaDesc||'')+'</div></div>';
+    return '<div class="card hazard '+esc(state)+'" onclick="openUrl(\''+esc(h.sourceUrl||'')+'\')"><div class="hazard-head"><div class="name">'+esc(h.event||h.headline||code)+'</div><span class="pill">'+esc(code+(h.action?' · '+h.action:''))+'</span></div><div class="hazard-time">Expires '+esc(fmtZ(h.expiresAt))+' · '+esc(until(h.expiresAt))+'</div><div class="status-time">Updated '+esc(fmtZ(h.updatedAt))+(h.endsAt?' · Hazard valid until '+esc(fmtZ(h.endsAt)):'')+'</div><div class="small">'+esc(h.areaDesc||'')+'</div></div>';
   }).join('');
   return section('Long-Fused Hazards · '+list.length,'NPW / FAA / MWW / WSW / CFW / RFW / TCV','<div class="hazards">'+cards+'</div>');
 }
