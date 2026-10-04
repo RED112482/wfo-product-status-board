@@ -1,19 +1,13 @@
 let DATA=null,mode='mob',backup='LIX',riverCache={};
 
 function jsonp(api,params={}){
-  return new Promise((resolve,reject)=>{
-    const base=(window.STATUS_BOARD_CONFIG?.API_URL||'').trim();
-    if(!/^https:\/\/script\.google\.com\/(?:a\/macros\/[^/]+\/)?macros\/s\/.+\/exec$/.test(base) && !/^https:\/\/script\.google\.com\/a\/macros\/[^/]+\/s\/.+\/exec$/.test(base)){
-      reject(new Error('Set the Apps Script /exec URL in docs/config.js')); return;
-    }
-    const cb='__wfo_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-    const u=new URL(base); u.searchParams.set('api',api); u.searchParams.set('callback',cb); u.searchParams.set('_',Date.now());
-    Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,String(v)));
-    const s=document.createElement('script'); let timer;
-    const done=()=>{clearTimeout(timer);delete window[cb];s.remove()};
-    window[cb]=d=>{done();resolve(d)}; s.onerror=()=>{done();reject(new Error('Apps Script request failed'))};
-    s.src=u; document.head.appendChild(s); timer=setTimeout(()=>{done();reject(new Error('Apps Script request timed out'))},30000);
-  });
+  let url;
+  if(api==='dashboard') url='data/status.json';
+  else if(api==='rivers') url='data/rivers-'+String(params.office||'').toUpperCase()+'.json';
+  else return Promise.reject(new Error('Unknown local data request: '+api));
+  const sep=url.includes('?')?'&':'?';
+  return fetch(url+sep+'t='+Date.now(),{cache:'no-store'})
+    .then(r=>{if(!r.ok)throw new Error('Live data file unavailable ('+r.status+')');return r.json()});
 }
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function openUrl(u){if(u)window.open(u,'_blank','noopener')}
