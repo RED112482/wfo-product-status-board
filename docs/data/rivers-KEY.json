@@ -1,0 +1,14 @@
+{
+  "office": "KEY",
+  "generatedAt": "2026-10-04T15:07:54.983Z",
+  "rivers": [],
+  "totalFound": 0,
+  "displayed": 0,
+  "truncated": false,
+  "discoverySource": "RVF history",
+  "historyProductsChecked": 0,
+  "warningProductsChecked": 0,
+  "errors": [
+    "RVFKEY: no RVF history returned"
+  ]
+}
