@@ -23,9 +23,9 @@ const APP = {
   PRODUCT_AGE_LATE_HOURS: 24,
   CARD_AGE_WARN_HOURS: 8,
   CARD_AGE_LATE_HOURS: 12,
-  // Products and long-fused hazard cards use 8h aging / 12h outdated issuance-age thresholds.
-  HAZARD_EXPIRY_WARN_MINUTES: 90,
-  HAZARD_EXPIRY_LATE_MINUTES: 30,
+  // Products use issuance age; long-fused hazards use time remaining until product drop-off.
+  HAZARD_EXPIRY_WARN_MINUTES: 480,
+  HAZARD_EXPIRY_LATE_MINUTES: 60,
   NWR_PNS_MAX_PRODUCTS: 140,
   NWR_PNS_MAX_AGE_DAYS: 240,
   USER_AGENT: 'WFO-MOB-Product-Status-Board/3.0 (contact: replace-with-your-email@noaa.gov)',
@@ -448,7 +448,7 @@ function parseLongFusedHazards_(root, now) {
         urgency: String(p.urgency || ''),
         vtec,
         // Hazard card color follows the same issuance-age thresholds as the main Products section.
-        state: cardAgeState_(ageHours),
+        state: hazardExpiryState_(expires, now),
         sourceUrl
       };
 
