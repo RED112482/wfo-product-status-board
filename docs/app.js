@@ -23,6 +23,14 @@ function productAgeState(d){
   if(h>=8)return 'warn';
   return 'good';
 }
+function hazardDropoffState(d){
+  if(!d)return 'na';
+  const h=(new Date(d).getTime()-Date.now())/3600000;
+  if(!Number.isFinite(h))return 'na';
+  if(h<1)return 'late';
+  if(h<=8)return 'warn';
+  return 'good';
+}
 function setMode(m){mode=m;document.getElementById('mobTab').classList.toggle('active',m==='mob');document.getElementById('backupTab').classList.toggle('active',m==='backup');render()}
 function setBackup(id){backup=id;render()}
 function loadData(force=false){
@@ -133,7 +141,7 @@ function hazardPanel(o){
   if(!list.length)return section('Long-Fused Hazards','NPW / FAA / MWW / WSW / CFW / RFW / TCV','<div class="clear">● No active long-fused hazards</div>');
   const cards=list.map(h=>{
     const code=h.displayProduct||h.product||'';
-    const state=productAgeState(h.updatedAt);
+    const state=hazardDropoffState(h.expiresAt);
     return '<div class="card hazard '+esc(state)+'" onclick="openUrl(\''+esc(h.sourceUrl||'')+'\')"><div class="hazard-head"><div class="name">'+esc(h.event||h.headline||code)+'</div><span class="pill">'+esc(code+(h.action?' · '+h.action:''))+'</span></div><div class="hazard-time">Expires '+esc(fmtZ(h.expiresAt))+' · '+esc(until(h.expiresAt))+'</div><div class="status-time">Updated '+esc(fmtZ(h.updatedAt))+(h.endsAt?' · Hazard valid until '+esc(fmtZ(h.endsAt)):'')+'</div><div class="small">'+esc(h.areaDesc||'')+'</div></div>';
   }).join('');
   return section('Long-Fused Hazards · '+list.length,'NPW / FAA / MWW / WSW / CFW / RFW / TCV','<div class="hazards">'+cards+'</div>');
