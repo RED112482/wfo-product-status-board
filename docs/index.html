@@ -21,11 +21,18 @@
 </nav>
 <div id="backupTabs" class="backup-tabs hidden"></div>
 <div class="age-legend">
-  <strong>Products + Long-Fused:</strong>
-  <span><i class="dot gooddot"></i>Good &lt; 8h</span>
-  <span><i class="dot warndot"></i>Aging 8h to &lt; 12h</span>
-  <span><i class="dot latedot"></i>Outdated ≥ 12h</span>
+  <strong>Products Age:</strong>
+  <span><i class="dot gooddot"></i>Green &lt; 8h old</span>
+  <span><i class="dot warndot"></i>Yellow 8h to &lt; 12h old</span>
+  <span><i class="dot latedot"></i>Red ≥ 12h old</span>
   <span><i class="dot nadot"></i>No data</span>
+</div>
+<div class="age-legend">
+  <strong>Long-Fused Drop-Off:</strong>
+  <span><i class="dot gooddot"></i>Green &gt; 8h remaining</span>
+  <span><i class="dot warndot"></i>Yellow 1–8h remaining</span>
+  <span><i class="dot latedot"></i>Red &lt; 1h remaining / expired</span>
+  <span><i class="dot nadot"></i>No expiration</span>
 </div>
 <div id="content"><div class="panel loading">Loading live NWS/NOAA status…</div></div>
 <footer>Live NWS / NOAA data via GitHub Actions.</footer>
@@ -34,6 +41,6 @@
   <div class="modal-card"><button class="x" onclick="closeModal()">×</button><h3 id="modalTitle"></h3><div id="modalSub" class="muted"></div><img id="modalImg" alt="NOAA hydrograph"><div id="modalNote" class="note"></div></div>
 </div>
 <script src="config.js?v=fresh-products-1"></script>
-<script src="app.js?v=actual-products-1"></script>
+<script src="app.js?v=dual-scales-1"></script>
 </body>
 </html>
