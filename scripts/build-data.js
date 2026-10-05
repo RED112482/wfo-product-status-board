@@ -105,6 +105,98 @@ function refreshRoutineProductsFromPages(board){
   });
 }
 refreshRoutineProductsFromPages(dashboard);
+
+function stripHtmlText(s){
+  return String(s||'')
+    .replace(/<script\b[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi,' ')
+    .replace(/<[^>]+>/g,' ')
+    .replace(/&nbsp;/gi,' ')
+    .replace(/&amp;/gi,'&')
+    .replace(/&#39;/g,"'")
+    .replace(/&quot;/gi,'"')
+    .replace(/\r/g,'')
+    .replace(/[ \t]+/g,' ');
+}
+function parseVtecZulu(s){
+  const m=String(s||'').match(/^(\d{2})(\d{2})(\d{2})T(\d{2})(\d{2})Z$/);
+  if(!m || s==='000000T0000Z') return null;
+  const yy=+m[1], year=yy>=70?1900+yy:2000+yy;
+  const d=new Date(Date.UTC(year,+m[2]-1,+m[3],+m[4],+m[5],0));
+  return isNaN(d)?null:d;
+}
+function productPageHazard(office,pil,text){
+  const plain=stripHtmlText(text);
+  const now=new Date();
+  const issue=actualProductTimeFromText(plain,now);
+  const re=/\/O\.([A-Z]{3})\.K([A-Z0-9]{3})\.([A-Z]{2})\.([WAYS])\.(\d{4})\.(\d{6}T\d{4}Z|000000T0000Z)-(\d{6}T\d{4}Z|000000T0000Z)\//g;
+  const active=[];
+  let m;
+  while((m=re.exec(plain))){
+    if(m[2]!==office) continue;
+    const action=m[1], end=parseVtecZulu(m[7]);
+    if(action==='CAN'||action==='EXP') continue;
+    if(end && end.getTime()<=now.getTime()) continue;
+    active.push({action,phen:m[3],sig:m[4],etn:m[5],end});
+  }
+  if(!active.length) return null;
+  active.sort((a,b)=>(a.end?.getTime()||Infinity)-(b.end?.getTime()||Infinity));
+  const earliest=active[0].end||null;
+  const labels={MWW:'Marine Weather Message',CFW:'Coastal Hazard Message',NPW:'Non-Precipitation Weather Message',WSW:'Winter Weather Message',RFW:'Red Flag Warning',TCV:'Tropical Cyclone Watch/Warning',FFA:'Flood Watch'};
+  return {
+    office,
+    product:pil,
+    displayProduct:pil==='FFA'?'FAA':pil,
+    event:labels[pil]||pil,
+    subHazards:[],
+    headline:labels[pil]||pil,
+    action:active[0].action||'',
+    updatedAt:issue?issue.toISOString():now.toISOString(),
+    ageHours:issue?Math.max(0,(now-issue)/3600000):0,
+    expiresAt:earliest?earliest.toISOString():null,
+    endsAt:earliest?earliest.toISOString():null,
+    expiresInMinutes:earliest?Math.round((earliest-now)/60000):null,
+    areaDesc:'',
+    severity:'',
+    certainty:'',
+    urgency:'',
+    vtec:'',
+    state:issue?((now-issue)/3600000>=12?'late':(now-issue)/3600000>=8?'warn':'good'):'good',
+    sourceUrl:'https://forecast.weather.gov/product.php?site=NWS&issuedby='+office+'&product='+pil+'&format=CI&version=1&glossary=0'
+  };
+}
+function supplementHazardsFromProductPages(board){
+  const reqs=[], meta=[];
+  for(const office of Object.keys(board.offices||{})){
+    for(const pil of ['MWW','CFW','NPW','WSW','RFW','TCV','FFA']){
+      reqs.push({url:'https://forecast.weather.gov/product.php?site=NWS&issuedby='+office+'&product='+pil+'&format=TXT&version=1&glossary=0',
+        headers:{'User-Agent':'WFO-MOB-Product-Status-Board/4.1','Accept':'text/plain,text/html,*/*'}});
+      meta.push({office,pil});
+    }
+  }
+  const resps=runBatch(reqs);
+  resps.forEach((r,i)=>{
+    if(!r || r.getResponseCode()<200 || r.getResponseCode()>=300) return;
+    const {office,pil}=meta[i];
+    const h=productPageHazard(office,pil,r.getContentText());
+    if(!h) return;
+    const arr=board.offices?.[office]?.hazards;
+    if(!Array.isArray(arr)) return;
+    const same=arr.find(x=>x && x.product===pil);
+    if(!same) arr.push(h);
+    else if(new Date(h.updatedAt)>new Date(same.updatedAt||0)){
+      Object.assign(same,h);
+    }
+  });
+  for(const office of Object.keys(board.offices||{})){
+    const arr=board.offices[office].hazards||[];
+    arr.sort((a,b)=>new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
+    if(board.offices[office].hazardMeta){
+      board.offices[office].hazardMeta.source='NWS Active Alerts API + actual NWS product-page cross-check';
+    }
+  }
+}
+supplementHazardsFromProductPages(dashboard);
 write('status.json',dashboard);
 for(const office of ['MOB','LIX','TAE','KEY']){
   try{write('rivers-'+office+'.json',context.getRiverData(office,true))}
