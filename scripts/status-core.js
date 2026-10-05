@@ -41,7 +41,8 @@ const APP = {
       point: [30.6914, -88.2428],
       tafs: ['KMOB', 'KBFM', 'KPNS', 'KJKA'],
       rvf: [
-        { pil: 'RVFMOB', location: 'MOB', rfc: 'SERFC' }
+        { pil: 'ATLRVFMOB', location: 'ATL', targetPil: 'RVFMOB', rfc: 'SERFC' },
+        { pil: 'NEWRVFMOB', location: 'NEW', targetPil: 'RVFMOB', rfc: 'LMRFC' }
       ],
       radars: [
         { id: 'KMOB', ftm: 'MOB', type: 'WSR-88D' },
@@ -62,8 +63,7 @@ const APP = {
       point: [30.3367, -89.8254],
       tafs: ['KBTR', 'KMSY', 'KMCB', 'KGPT', 'KHUM', 'KASD', 'KNEW', 'KHDC'],
       rvf: [
-        { pil: 'RVFLIX', location: 'LIX', rfc: 'LMRFC' },
-        { pil: 'RVFLOM', location: 'LOM', rfc: 'LMRFC', note: 'Lower Mississippi operational mainstem' }
+        { pil: 'NEWRVFLIX', location: 'NEW', targetPil: 'RVFLIX', rfc: 'LMRFC' }
       ],
       radars: [
         { id: 'KHDC', ftm: 'HDC', type: 'WSR-88D' },
@@ -84,7 +84,7 @@ const APP = {
       point: [30.3965, -84.3289],
       tafs: ['KTLH', 'KECP', 'KDHN', 'KVLD', 'KABY'],
       rvf: [
-        { pil: 'RVFTAE', location: 'TAE', rfc: 'SERFC' }
+        { pil: 'ATLRVFTAE', location: 'ATL', targetPil: 'RVFTAE', rfc: 'SERFC' }
       ],
       radars: [
         { id: 'KEOX', ftm: 'EOX', type: 'WSR-88D' },
@@ -109,7 +109,7 @@ const APP = {
       point: [24.5600, -81.7870],
       tafs: ['KEYW', 'KMTH'],
       rvf: [
-        { pil: 'RVFKEY', location: 'KEY', rfc: 'SERFC' }
+        { pil: 'ATLRVFKEY', location: 'ATL', targetPil: 'RVFKEY', rfc: 'SERFC' }
       ],
       radars: [
         { id: 'KAMX', ftm: 'AMX', type: 'WSR-88D' },
@@ -194,7 +194,7 @@ function getDashboardData(forceRefresh) {
     meta.push({ kind: 'taf', office });
 
     APP.OFFICES[office].rvf.forEach(r => {
-      requests.push(req_(`https://api.weather.gov/products/types/RVF/locations/${r.location}/latest`, nwsHeaders));
+      requests.push(req_(`https://api.weather.gov/products/types/RVF/locations/${r.location}`, nwsHeaders));
       meta.push({ kind: 'rvf', office, config: r });
     });
 
@@ -277,7 +277,7 @@ function getDashboardData(forceRefresh) {
     }
 
     if (m.kind === 'rvf') {
-      offices[m.office].rvf.push(makeRvfStatus_(m.config, json, code, now));
+      offices[m.office].rvf.push(makeRvfStatusFromHistory_(m.config, json, code, now, nwsHeaders));
     }
 
     if (m.kind === 'radar') {
@@ -633,7 +633,7 @@ function getRiverData(office, forceRefresh) {
   if (!APP.OFFICES[office]) throw new Error('Unknown WFO: ' + office);
 
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'river-status-rvf-nwps-warnings-v3-' + office;
+  const cacheKey = 'river-status-rvf-nwps-warnings-v4-' + office;
   if (!forceRefresh) {
     const cached = cache.get(cacheKey);
     if (cached) return JSON.parse(cached);
@@ -684,6 +684,7 @@ function getRiverData(office, forceRefresh) {
       if (!json) return;
       const text = String(json.productText || json.text || json.body || '');
       if (!text) return;
+      if (cfg.targetPil && !textMatchesRvfTarget_(text, cfg.targetPil)) return;
       const issued = parseDate_(json.issuanceTime || json.issueTime || refs[idx].issuedAt) || now;
       const parsed = parseRvfRiverProduct_(text, issued, cfg, refs[idx].id);
       parsed.forEach(r => {
@@ -752,6 +753,18 @@ function getRiverData(office, forceRefresh) {
       r.warningCheck = 'active-below-minor';
     } else {
       r.warningCheck = 'none';
+    }
+
+    const rvfTime = parseDate_(r.productIssuedAt);
+    const riverProductTime = r.floodWarning ? parseDate_(r.floodWarning.lastUpdated) : null;
+    r.newRvfGuidance = false;
+    r.riverProductLagMinutes = null;
+    if (r.floodWarning && r.floodWarning.active && rvfTime && riverProductTime) {
+      const lagMin = Math.round((rvfTime.getTime() - riverProductTime.getTime()) / 60000);
+      if (lagMin > 5) {
+        r.newRvfGuidance = true;
+        r.riverProductLagMinutes = lagMin;
+      }
     }
   });
 
@@ -1078,6 +1091,53 @@ function latestExpectedTafIssue_(now) {
 }
 function fmtUtcHm_(d){ return String(d.getUTCHours()).padStart(2,'0') + String(d.getUTCMinutes()).padStart(2,'0'); }
 function tafStateRank_(s){ return ({late:4,warn:3,na:2,good:1})[s] || 0; }
+
+function textMatchesRvfTarget_(text, targetPil) {
+  const t = String(text || '').toUpperCase();
+  const p = String(targetPil || '').toUpperCase();
+  if (!p) return true;
+  return new RegExp('(?:^|\\s)' + p + '(?:\\s|$)', 'm').test(t);
+}
+
+function makeRvfStatusFromHistory_(cfg, historyJson, code, now, headers) {
+  if (!ok_(code) || !historyJson) return makeRvfStatus_(cfg, null, code, now);
+  const refs = extractRvfProductRefs_(historyJson).slice(0, 50);
+  if (!refs.length) return makeRvfStatus_(cfg, null, code, now);
+
+  const resps = fetchAllChunked_(refs.map(r => req_(r.url, headers)), 25);
+  let bestIssued = null;
+  let bestId = null;
+  for (let i = 0; i < resps.length; i++) {
+    const resp = resps[i];
+    if (!resp || !ok_(resp.getResponseCode())) continue;
+    const j = safeJson_(resp);
+    if (!j) continue;
+    const text = String(j.productText || j.text || j.body || '');
+    if (!textMatchesRvfTarget_(text, cfg.targetPil)) continue;
+    const issued = parseDate_(j.issuanceTime || j.issueTime || refs[i].issuedAt);
+    if (!issued) continue;
+    if (!bestIssued || issued > bestIssued) {
+      bestIssued = issued;
+      bestId = refs[i].id || j.id || null;
+    }
+  }
+
+  if (!bestIssued) return makeRvfStatus_(cfg, null, 404, now);
+  const ageHours = Math.max(0, (now - bestIssued) / 3600000);
+  return {
+    pil: cfg.pil,
+    rfc: cfg.rfc,
+    note: cfg.note || '',
+    state: ageState_(ageHours),
+    issuedAt: bestIssued.toISOString(),
+    ageHours: Math.round(ageHours * 10) / 10,
+    warnHours: APP.PRODUCT_AGE_WARN_HOURS,
+    lateHours: APP.PRODUCT_AGE_LATE_HOURS,
+    sourceUrl: bestId ? `https://api.weather.gov/products/${encodeURIComponent(bestId)}` :
+      `https://forecast.weather.gov/product.php?site=NWS&issuedby=${cfg.location}&product=RVF&format=CI&version=1&glossary=0`,
+    source: `${cfg.rfc} River Forecast`
+  };
+}
 
 function makeRvfStatus_(cfg, json, code, now) {
   const issued = ok_(code) && json ? parseDate_(json.issuanceTime || json.issueTime || json.generatedAt) : null;
