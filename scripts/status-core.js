@@ -41,8 +41,8 @@ const APP = {
       point: [30.6914, -88.2428],
       tafs: ['KMOB', 'KBFM', 'KPNS', 'KJKA'],
       rvf: [
-        { pil: 'ATLRVFMOB', location: 'ATL', targetPil: 'RVFMOB', rfc: 'SERFC' },
-        { pil: 'NEWRVFMOB', location: 'NEW', targetPil: 'RVFMOB', rfc: 'LMRFC' }
+        { pil: 'ATLRVFMOB', location: 'MOB', targetPil: 'RVFMOB', sourceWmo: 'KALR', rfc: 'SERFC' },
+        { pil: 'NEWRVFMOB', location: 'MOB', targetPil: 'RVFMOB', sourceWmo: 'KORN', rfc: 'LMRFC' }
       ],
       radars: [
         { id: 'KMOB', ftm: 'MOB', type: 'WSR-88D' },
@@ -63,7 +63,7 @@ const APP = {
       point: [30.3367, -89.8254],
       tafs: ['KBTR', 'KMSY', 'KMCB', 'KGPT', 'KHUM', 'KASD', 'KNEW', 'KHDC'],
       rvf: [
-        { pil: 'NEWRVFLIX', location: 'NEW', targetPil: 'RVFLIX', rfc: 'LMRFC' }
+        { pil: 'NEWRVFLIX', location: 'LIX', targetPil: 'RVFLIX', sourceWmo: 'KORN', rfc: 'LMRFC' }
       ],
       radars: [
         { id: 'KHDC', ftm: 'HDC', type: 'WSR-88D' },
@@ -84,7 +84,7 @@ const APP = {
       point: [30.3965, -84.3289],
       tafs: ['KTLH', 'KECP', 'KDHN', 'KVLD', 'KABY'],
       rvf: [
-        { pil: 'ATLRVFTAE', location: 'ATL', targetPil: 'RVFTAE', rfc: 'SERFC' }
+        { pil: 'ATLRVFTAE', location: 'TAE', targetPil: 'RVFTAE', sourceWmo: 'KALR', rfc: 'SERFC' }
       ],
       radars: [
         { id: 'KEOX', ftm: 'EOX', type: 'WSR-88D' },
@@ -109,7 +109,7 @@ const APP = {
       point: [24.5600, -81.7870],
       tafs: ['KEYW', 'KMTH'],
       rvf: [
-        { pil: 'ATLRVFKEY', location: 'ATL', targetPil: 'RVFKEY', rfc: 'SERFC' }
+        { pil: 'ATLRVFKEY', location: 'KEY', targetPil: 'RVFKEY', sourceWmo: 'KALR', rfc: 'SERFC' }
       ],
       radars: [
         { id: 'KAMX', ftm: 'AMX', type: 'WSR-88D' },
@@ -684,7 +684,7 @@ function getRiverData(office, forceRefresh) {
       if (!json) return;
       const text = String(json.productText || json.text || json.body || '');
       if (!text) return;
-      if (cfg.targetPil && !textMatchesRvfTarget_(text, cfg.targetPil)) return;
+      if (cfg.targetPil && !textMatchesRvfTarget_(text, cfg.targetPil, cfg.sourceWmo)) return;
       const issued = parseDate_(json.issuanceTime || json.issueTime || refs[idx].issuedAt) || now;
       const parsed = parseRvfRiverProduct_(text, issued, cfg, refs[idx].id);
       parsed.forEach(r => {
@@ -1092,11 +1092,13 @@ function latestExpectedTafIssue_(now) {
 function fmtUtcHm_(d){ return String(d.getUTCHours()).padStart(2,'0') + String(d.getUTCMinutes()).padStart(2,'0'); }
 function tafStateRank_(s){ return ({late:4,warn:3,na:2,good:1})[s] || 0; }
 
-function textMatchesRvfTarget_(text, targetPil) {
+function textMatchesRvfTarget_(text, targetPil, sourceWmo) {
   const t = String(text || '').toUpperCase();
   const p = String(targetPil || '').toUpperCase();
-  if (!p) return true;
-  return new RegExp('(?:^|\\s)' + p + '(?:\\s|$)', 'm').test(t);
+  const w = String(sourceWmo || '').toUpperCase();
+  if (p && !new RegExp('(?:^|\\s)' + p + '(?:\\s|$)', 'm').test(t)) return false;
+  if (w && !new RegExp('^FGUS\\d{2}\\s+' + w + '\\b', 'm').test(t)) return false;
+  return true;
 }
 
 function makeRvfStatusFromHistory_(cfg, historyJson, code, now, headers) {
@@ -1113,7 +1115,7 @@ function makeRvfStatusFromHistory_(cfg, historyJson, code, now, headers) {
     const j = safeJson_(resp);
     if (!j) continue;
     const text = String(j.productText || j.text || j.body || '');
-    if (!textMatchesRvfTarget_(text, cfg.targetPil)) continue;
+    if (!textMatchesRvfTarget_(text, cfg.targetPil, cfg.sourceWmo)) continue;
     const issued = parseDate_(j.issuanceTime || j.issueTime || refs[i].issuedAt);
     if (!issued) continue;
     if (!bestIssued || issued > bestIssued) {
