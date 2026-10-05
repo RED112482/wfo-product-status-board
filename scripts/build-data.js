@@ -161,7 +161,7 @@ function productPageHazard(office,pil,text){
     certainty:'',
     urgency:'',
     vtec:'',
-    state:issue?((now-issue)/3600000>=12?'late':(now-issue)/3600000>=8?'warn':'good'):'good',
+    state:earliest?(((earliest-now)/3600000)<1?'late':((earliest-now)/3600000)<=8?'warn':'good'):'na',
     sourceUrl:'https://forecast.weather.gov/product.php?site=NWS&issuedby='+office+'&product='+pil+'&format=CI&version=1&glossary=0'
   };
 }
