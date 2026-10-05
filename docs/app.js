@@ -152,14 +152,20 @@ function loadRivers(id){
 }
 function drawRivers(id,d){
   const el=document.getElementById('rivers-'+id);if(!el)return;
-  const rows=(d?.rivers||[]).map(r=>'<tr class="river-row" onclick="showHydro(\''+esc(r.id)+'\',\''+esc(r.name)+'\',\''+esc(r.hydrographUrl||'')+'\')"><td><span class="warnflag '+(r.floodWarning?.active?'active':r.warningCheck==='missing'?'missing':'')+'"></span><b>'+esc(r.name)+'</b><div class="small">'+esc(r.id)+(r.rfc?' · '+esc(r.rfc):'')+'</div></td><td>'+stage(r.observed,r.unit,r.observedCategory)+'<div class="small">'+esc(r.observedTime?fmtZ(r.observedTime):'—')+'</div></td><td>'+stage(r.forecast,r.unit,r.forecastCategory)+'<div class="small">'+esc(r.forecastTime?fmtZ(r.forecastTime):'Latest RVF')+'</div></td><td>'+thresholds(r.thresholds,r.unit)+'</td><td>'+warningText(r)+'</td></tr>').join('');
+  const rows=(d?.rivers||[]).map(r=>'<tr class="river-row" onclick="showHydro(\''+esc(r.id)+'\',\''+esc(r.name)+'\',\''+esc(r.hydrographUrl||'')+'\')"><td><span class="warnflag '+(r.newRvfGuidance?'guidance':r.floodWarning?.active?'active':r.warningCheck==='missing'?'missing':'')+'"></span><b>'+esc(r.name)+'</b><div class="small">'+esc(r.id)+(r.rfc?' · '+esc(r.rfc):'')+'</div></td><td>'+stage(r.observed,r.unit,r.observedCategory)+'<div class="small">'+esc(r.observedTime?fmtZ(r.observedTime):'—')+'</div></td><td>'+stage(r.forecast,r.unit,r.forecastCategory)+'<div class="small">'+esc(r.forecastTime?fmtZ(r.forecastTime):'Latest RVF')+'</div></td><td>'+thresholds(r.thresholds,r.unit)+'</td><td>'+warningText(r)+'</td></tr>').join('');
   const body=rows?'<div class="river-wrap"><table><thead><tr><th>River / Gauge</th><th>Current Stage</th><th>Forecast Stage</th><th>Flood Categories</th><th>River Flood Warning</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="loading">No river gauges returned.</div>';
   el.innerHTML=section('Rivers · '+(d?.rivers?.length||0),(d?.discoverySource||'RVF / NWPS'),body);
 }
 function stage(v,u,c){if(v==null||!isFinite(Number(v)))return '<span class="stage cat-na">No data</span>';return '<span class="stage cat-'+esc(c||'na')+'">'+Number(v).toFixed(Math.abs(Number(v))>=100?0:1)+' '+esc(unit(u))+'</span>'}
 function unit(u){u=String(u||'ft').toLowerCase();return u.includes('foot')||u.includes('feet')||u==='ft'?'ft':u.replace(/^.*:/,'')}
 function thresholds(t,u){if(!t)return '—';let a=[];if(t.action!=null)a.push('A '+t.action);if(t.minor!=null)a.push('Min '+t.minor);if(t.moderate!=null)a.push('Mod '+t.moderate);if(t.major!=null)a.push('Maj '+t.major);return esc(a.join(' · ')+' '+unit(u))}
-function warningText(r){const w=r.floodWarning||{};if(r.warningCheck==='missing')return '<b>CHECK WARNING</b><div class="small">At/above Minor with no active warning</div>';if(w.active)return '<b>ACTIVE · '+esc([w.productType,w.action].filter(Boolean).join(' '))+'</b><div class="small">Updated '+esc(fmtZ(w.lastUpdated))+' · Ends '+esc(fmtZ(w.expiresAt))+'</div>';return '<span class="muted">No active warning</span>'}
+function warningText(r){
+  const w=r.floodWarning||{};
+  const rvfFlag=r.newRvfGuidance?'<div class="rvf-guidance-flag">⚠ NEW RVF GUIDANCE</div><div class="small">RVF '+esc(fmtZ(r.productIssuedAt))+' is newer than river product '+esc(fmtZ(w.lastUpdated))+'</div>':'';
+  if(r.warningCheck==='missing')return '<b>CHECK WARNING</b><div class="small">At/above Minor with no active warning</div>'+rvfFlag;
+  if(w.active)return '<b>ACTIVE · '+esc([w.productType,w.action].filter(Boolean).join(' '))+'</b><div class="small">Updated '+esc(fmtZ(w.lastUpdated))+' · Ends '+esc(fmtZ(w.expiresAt))+'</div>'+rvfFlag;
+  return '<span class="muted">No active warning</span>';
+}
 function showHydro(id,name,url){const m=document.getElementById('modal'),img=document.getElementById('modalImg');document.getElementById('modalTitle').textContent=name||id;document.getElementById('modalSub').textContent=id+' · NOAA/NWPS latest forecast';img.src=(url||('https://water.noaa.gov/resources/hydrographs/'+String(id).toLowerCase()+'_hg.png'))+'?t='+Date.now();document.getElementById('modalNote').textContent='Click outside or × to close.';m.classList.add('show')}
 function closeModal(){document.getElementById('modal').classList.remove('show');document.getElementById('modalImg').src=''}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
