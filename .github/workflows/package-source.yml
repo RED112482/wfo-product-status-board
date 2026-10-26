@@ -1,0 +1,26 @@
+name: Package source backup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/package-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create source ZIP
+        run: |
+          zip -r WFO_Product_Status_Board_Full_Source.zip .             -x ".git/*"             -x "docs/data/*"
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: WFO-Product-Status-Board-Full-Source
+          path: WFO_Product_Status_Board_Full_Source.zip
+          retention-days: 30
